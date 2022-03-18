@@ -2,7 +2,7 @@
 # Load Vendor Corp Shared Infra
 ################################################################################
 module "shared" {
-  source                   = "git::ssh://git@github.com/vendorcorp/terraform-shared-infrastructure.git?ref=v0.1.2"
+  source                   = "git::ssh://git@github.com/vendorcorp/terraform-shared-infrastructure.git?ref=v0.2.1"
   environment              = var.environment
   default_eks_cluster_name = "vendorcorp-us-east-2-63pl3dng"
 }
@@ -107,22 +107,6 @@ resource "kubernetes_deployment" "keycloak_deployment" {
 }
 
 ################################################################################
-# Create Endpoint for Keycloak
-################################################################################
-# resource "kubernetes_endpoints" "keycloak_endpoint" {
-#   metadata {
-#     name = "keycloak-endpoint"
-#     labels = {
-#       app = "keycloak"
-#     }
-#   }
-
-#   subset {
-
-#   }
-# }
-
-################################################################################
 # Create Service for Keycloak
 ################################################################################
 resource "kubernetes_service" "keycloak_service" {
@@ -140,47 +124,43 @@ resource "kubernetes_service" "keycloak_service" {
 
     port {
       name        = "http"
-      port        = 80
+      port        = 8080
       target_port = 8080
       protocol    = "TCP"
     }
 
-    type = "LoadBalancer"
+    type = "NodePort"
   }
-  wait_for_load_balancer = true
+  # wait_for_load_balancer = true
 }
 
 ################################################################################
 # Create Ingress for Keycloak
 ################################################################################
-# resource "kubernetes_ingress" "keycloak_ingress" {
-#   wait_for_load_balancer = true
+resource "kubernetes_ingress" "keycloak" {
+  metadata {
+    name      = "keycloak-ingress"
+    namespace = module.shared.namespace_shared_core_name
+    labels = {
+      app = "keycloak"
+    }
+    annotations = {
+      "kubernetes.io/ingress.class"               = "alb"
+      "alb.ingress.kubernetes.io/group.name"      = "vencorcorp-shared-core"
+      "alb.ingress.kubernetes.io/scheme"          = "internal"
+      "alb.ingress.kubernetes.io/certificate-arn" = module.shared.vendorcorp_net_cert_arn
+    }
+  }
 
-#   metadata {
-#     name      = "keycloak"
-#     namespace = module.shared.namespace_shared_core_name
-#     annotations = {
-#       "kubernetes.io/ingress.class"      = "alb"
-#       "alb.ingress.kubernetes.io/scheme" = "internal"
-#     }
-#   }
+  spec {
+    backend {
+      service_name = "keycloak-service"
+      service_port = 8080
+    }
+  }
 
-#   spec {
-#     rule {
-#       host = "keycloak.corp.${module.shared.dns_zone_public_name}"
-#       http {
-#         path {
-#           backend {
-#             service_name = kubernetes_service.keycloak_service.metadata.0.name
-#             service_port = 8080
-#           }
-
-#           path = "/"
-#         }
-#       }
-#     }
-#   }
-# }
+  wait_for_load_balancer = true
+}
 
 ################################################################################
 # Add/Update DNS for Load Balancer Ingress
@@ -190,8 +170,7 @@ resource "aws_route53_record" "keycloak_dns" {
   name    = "keycloak.corp"
   type    = "CNAME"
   ttl     = "300"
-  # records = [kubernetes_ingress.keycloak_ingress.status.0.load_balancer.0.ingress.0.hostname]
   records = [
-    kubernetes_service.keycloak_service.status.0.load_balancer.0.ingress.0.hostname
+    kubernetes_ingress.keycloak.status.0.load_balancer.0.ingress.0.hostname
   ]
 }
