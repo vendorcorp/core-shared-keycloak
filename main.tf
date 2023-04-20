@@ -48,7 +48,7 @@ resource "kubernetes_deployment" "keycloak_deployment" {
           instancegroup = "shared"
         }
         container {
-          image = "quay.io/keycloak/keycloak:17.0.0"
+          image = "quay.io/keycloak/keycloak:21.0.2"
           name  = "keycloak"
 
           args = ["start", "--hostname=keycloak.corp.${module.shared.dns_zone_public_name}"]
