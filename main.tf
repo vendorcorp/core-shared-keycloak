@@ -137,7 +137,7 @@ resource "kubernetes_service" "keycloak_service" {
 ################################################################################
 # Create Ingress for Keycloak
 ################################################################################
-resource "kubernetes_ingress" "keycloak" {
+resource "kubernetes_ingress_v1" "keycloak" {
   metadata {
     name      = "keycloak-ingress"
     namespace = module.shared.namespace_shared_core_name
@@ -153,9 +153,21 @@ resource "kubernetes_ingress" "keycloak" {
   }
 
   spec {
-    backend {
-      service_name = "keycloak-service"
-      service_port = 8080
+    rule {
+      host = "keycloak.corp.${module.shared.dns_zone_public_name}"
+      http {
+        path {
+          path = "/*"
+          backend {
+            service {
+              name = "keycloak-service"
+              port {
+                number = 8080
+              }
+            }
+          }
+        }
+      }
     }
   }
 
@@ -171,6 +183,6 @@ resource "aws_route53_record" "keycloak_dns" {
   type    = "CNAME"
   ttl     = "300"
   records = [
-    kubernetes_ingress.keycloak.status.0.load_balancer.0.ingress.0.hostname
+    kubernetes_ingress_v1.keycloak.status.0.load_balancer.0.ingress.0.hostname
   ]
 }
