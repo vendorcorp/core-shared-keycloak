@@ -8,6 +8,21 @@ module "shared" {
 }
 
 ################################################################################
+# PostgreSQL Provider
+################################################################################
+provider "postgresql" {
+  scheme          = "awspostgres"
+  host            = module.shared.pgsql_cluster_endpoint_write
+  port            = module.shared.pgsql_cluster_port
+  database        = "postgres"
+  username        = module.shared.pgsql_cluster_master_username
+  password        = var.pgsql_password
+  sslmode         = "require"
+  connect_timeout = 15
+  superuser       = false
+}
+
+################################################################################
 # Connect to our k8s Cluster
 ################################################################################
 provider "kubernetes" {

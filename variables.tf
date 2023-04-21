@@ -22,3 +22,13 @@ variable "environment" {
   type        = string
   default     = "production"
 }
+
+variable "pgsql_password" {
+  description = "Password for the main account in PostgreSQL Cluster"
+  type        = string
+  sensitive   = true
+  validation {
+    condition     = length(var.pgsql_password) > 0
+    error_message = "Root PostgreSQL password must be supplied."
+  }
+}
