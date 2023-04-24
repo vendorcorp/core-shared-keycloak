@@ -2,7 +2,7 @@
 # Load Vendor Corp Shared Infra
 ################################################################################
 module "shared" {
-  source                   = "git::ssh://git@github.com/vendorcorp/terraform-shared-infrastructure.git?ref=v0.2.1"
+  source                   = "git::ssh://git@github.com/vendorcorp/terraform-shared-infrastructure.git?ref=v0.5.0"
   environment              = var.environment
   default_eks_cluster_name = "vendorcorp-us-east-2-63pl3dng"
 }
@@ -20,6 +20,30 @@ provider "postgresql" {
   sslmode         = "require"
   connect_timeout = 15
   superuser       = false
+}
+
+# --------------------------------------------------------------------------
+# Create a unique database for Keycloak
+# --------------------------------------------------------------------------
+resource "postgresql_role" "keycloak" {
+  name     = local.pg_user_username
+  login    = true
+  password = local.pg_user_password
+}
+
+resource "postgresql_grant_role" "grant_root" {
+  role              = module.shared.pgsql_cluster_master_username
+  grant_role        = postgresql_role.keycloak.name
+  with_admin_option = true
+}
+
+resource "postgresql_database" "keycloak" {
+  name              = local.pg_database_name
+  owner             = local.pg_user_username
+  template          = "template0"
+  lc_collate        = "C"
+  connection_limit  = -1
+  allow_connections = true
 }
 
 ################################################################################
@@ -81,6 +105,26 @@ resource "kubernetes_deployment" "keycloak_deployment" {
           env {
             name  = "KC_PROXY"
             value = "edge"
+          }
+
+          env {
+            name  = "KC_DB"
+            value = "postgres"
+          }
+
+          env {
+            name  = "KC_DB_URL"
+            value = "jdbc:postgresql://${module.shared.pgsql_cluster_endpoint_write}:${module.shared.pgsql_cluster_port}/${local.pg_database_name}"
+          }
+
+          env {
+            name  = "KC_DB_USERNAME"
+            value = local.pg_user_username
+          }
+
+          env {
+            name  = "KC_DB_PASSWORD"
+            value = local.pg_user_password
           }
 
           # resources {
