@@ -67,7 +67,7 @@ resource "kubernetes_deployment" "keycloak_deployment" {
   }
 
   spec {
-    replicas = 1
+    replicas = 3
 
     selector {
       match_labels = {
@@ -90,7 +90,7 @@ resource "kubernetes_deployment" "keycloak_deployment" {
           image = "quay.io/keycloak/keycloak:21.0.2"
           name  = "keycloak"
 
-          args = ["start", "--hostname=keycloak.corp.${module.shared.dns_zone_public_name}"]
+          args = ["start", "--hostname=keycloak.corp.${module.shared.dns_zone_public_name}", "--cache-stack=kubernetes"]
 
           env {
             name  = "KEYCLOAK_ADMIN"
@@ -125,6 +125,21 @@ resource "kubernetes_deployment" "keycloak_deployment" {
           env {
             name  = "KC_DB_PASSWORD"
             value = local.pg_user_password
+          }
+
+          env {
+            name  = "JAVA_OPTS_APPEND"
+            value = "-Djgroups.dns.query=keycloak-service-cache.shared-core.svc.cluster.local"
+          }
+
+          port {
+            name = "keycloak"
+            container_port = 8080
+          }
+
+          port {
+            name = "keycloak-cache"
+            container_port = 7800
           }
 
           # resources {
@@ -191,6 +206,30 @@ resource "kubernetes_service" "keycloak_service" {
     type = "NodePort"
   }
   # wait_for_load_balancer = true
+}
+
+resource "kubernetes_service" "keycloak_service_cache" {
+  metadata {
+    name      = "keycloak-service-cache"
+    namespace = module.shared.namespace_shared_core_name
+    labels = {
+      app = "keycloak"
+    }
+  }
+  spec {
+    selector = {
+      app = kubernetes_deployment.keycloak_deployment.metadata.0.labels.app
+    }
+
+    port {
+      name        = "ping"
+      port        = 7800
+      target_port = 7800
+      protocol    = "TCP"
+    }
+
+    type = "ClusterIP"
+  }
 }
 
 ################################################################################
