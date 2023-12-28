@@ -104,7 +104,7 @@ resource "kubernetes_deployment" "keycloak_deployment" {
   }
 
   spec {
-    replicas = 1
+    replicas = 3
 
     selector {
       match_labels = {
