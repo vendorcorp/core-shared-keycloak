@@ -1,10 +1,20 @@
+terraform {
+  required_version = ">= 1.4.5"
+  required_providers {
+    postgresql = {
+      source  = "cyrilgdn/postgresql"
+      version = ">= 1.15.0"
+    }
+  }
+}
+
+
 ################################################################################
 # Load Vendor Corp Shared Infra
 ################################################################################
 module "shared" {
-  source                   = "git::ssh://git@github.com/vendorcorp/terraform-shared-infrastructure.git?ref=v0.2.1"
+  source                   = "git::ssh://git@github.com/vendorcorp/terraform-shared-infrastructure.git?ref=v0.6.1"
   environment              = var.environment
-  default_eks_cluster_name = "vendorcorp-us-east-2-63pl3dng"
 }
 
 ################################################################################
@@ -16,12 +26,78 @@ provider "kubernetes" {
 }
 
 ################################################################################
+# PostgreSQL Provider
+################################################################################
+provider "postgresql" {
+  scheme          = "awspostgres"
+  host            = module.shared.pgsql_cluster_endpoint_write
+  port            = module.shared.pgsql_cluster_port
+  database        = "postgres"
+  username        = var.pg_admin_username
+  password        = var.pg_admin_password
+  sslmode         = "require"
+  connect_timeout = 15
+  superuser       = false
+}
+
+################################################################################
+# Create a Database for Keycloak
+################################################################################
+resource "postgresql_role" "keycloak" {
+  name     = local.pgsql_user_username
+  login    = true
+  password = local.pgsql_user_password
+}
+
+# resource "postgresql_grant_role" "grant_root" {
+#   role              = var.pg_admin_username
+#   grant_role        = postgresql_role.keycloak.name
+#   with_admin_option = true
+# }
+
+resource "postgresql_database" "keycloak" {
+  name              = local.pgsql_database_name
+  owner             = local.pgsql_user_username
+  template          = "template0"
+  lc_collate        = "C"
+  connection_limit  = -1
+  allow_connections = true
+}
+
+################################################################################
+# Create Namespace
+################################################################################
+resource "kubernetes_namespace" "keycloak" {
+  metadata {
+    name = var.namespace
+  }
+}
+
+################################################################################
+# Create Secret
+################################################################################
+resource "kubernetes_secret" "keycloak" {
+  metadata {
+    name      = "keycloak-secrets"
+    namespace = var.namespace
+  }
+
+  data = {
+    "keycloak_admin_password" = local.keycloak_admin_password
+    "keycloak_db_username" = local.pgsql_user_username
+    "keycloak_db_password" = local.pgsql_user_password
+  }
+
+  type = "Opaque"
+}
+
+################################################################################
 # Create Deployment for Keycloak
 ################################################################################
 resource "kubernetes_deployment" "keycloak_deployment" {
   metadata {
     name      = "keycloak"
-    namespace = module.shared.namespace_shared_core_name
+    namespace = var.namespace
     labels = {
       app = "keycloak"
     }
@@ -44,14 +120,63 @@ resource "kubernetes_deployment" "keycloak_deployment" {
       }
 
       spec {
+
         node_selector = {
-          instancegroup = "shared"
+          instancegroup = "vendorcorp-core"
         }
+
+        toleration {
+          effect = "NoSchedule"
+          key = "dedicated"
+          operator = "Equal"
+          value = "vendorcorp-core"
+        }
+
         container {
-          image = "quay.io/keycloak/keycloak:21.0.2"
+          image = "quay.io/keycloak/keycloak:23.0.3"
           name  = "keycloak"
 
-          args = ["start", "--hostname=keycloak.corp.${module.shared.dns_zone_public_name}"]
+          args = ["start"]
+
+          env {
+            name = "KC_DB"
+            value = "postgres"
+          }
+
+          env {
+            name = "KC_DB_PASSWORD"
+            value_from {
+              secret_key_ref {
+                name = "keycloak-secrets"
+                key  = "keycloak_db_password"
+              }
+            }
+          }
+
+          env {
+            name = "KC_DB_URL"
+            value = "jdbc:postgresql://${module.shared.pgsql_cluster_endpoint_write}/${local.pgsql_database_name}"
+          }
+
+          env {
+            name = "KC_DB_USERNAME"
+            value_from {
+              secret_key_ref {
+                name = "keycloak-secrets"
+                key  = "keycloak_db_username"
+              }
+            }
+          }
+
+          env {
+            name = "KC_FEATURES"
+            value = "token-exchange"
+          }
+
+          env {
+            name = "KC_HOSTNAME"
+            value = "keycloak.corp.${module.shared.dns_zone_public_name}"
+          }
 
           env {
             name  = "KEYCLOAK_ADMIN"
@@ -60,7 +185,12 @@ resource "kubernetes_deployment" "keycloak_deployment" {
 
           env {
             name  = "KEYCLOAK_ADMIN_PASSWORD"
-            value = local.keycloak_admin_password
+            value_from {
+              secret_key_ref {
+                name = "keycloak-secrets"
+                key  = "keycloak_admin_password"
+              }
+            }
           }
 
           env {
@@ -79,12 +209,12 @@ resource "kubernetes_deployment" "keycloak_deployment" {
           #   }
           # }
 
-          readiness_probe {
-            http_get {
-              path = "/realms/master"
-              port = 8080
-            }
-          }
+          # readiness_probe {
+          #   http_get {
+          #     path = "/realms/master"
+          #     port = 8080
+          #   }
+          # }
 
           # liveness_probe {
           #   http_get {
@@ -100,6 +230,18 @@ resource "kubernetes_deployment" "keycloak_deployment" {
           #   initial_delay_seconds = 3
           #   period_seconds        = 3
           # }
+
+          volume_mount {
+            mount_path = "/keycloak-secrets"
+            name       = "keycloak-secrets"
+          }
+        }
+
+        volume {
+          name = "keycloak-secrets"
+          secret {
+            secret_name = "keycloak-secrets"
+          }
         }
       }
     }
@@ -112,7 +254,7 @@ resource "kubernetes_deployment" "keycloak_deployment" {
 resource "kubernetes_service" "keycloak_service" {
   metadata {
     name      = "keycloak-service"
-    namespace = module.shared.namespace_shared_core_name
+    namespace = var.namespace
     labels = {
       app = "keycloak"
     }
@@ -131,7 +273,6 @@ resource "kubernetes_service" "keycloak_service" {
 
     type = "NodePort"
   }
-  # wait_for_load_balancer = true
 }
 
 ################################################################################
@@ -140,15 +281,16 @@ resource "kubernetes_service" "keycloak_service" {
 resource "kubernetes_ingress_v1" "keycloak" {
   metadata {
     name      = "keycloak-ingress"
-    namespace = module.shared.namespace_shared_core_name
+    namespace = var.namespace
     labels = {
       app = "keycloak"
     }
     annotations = {
       "kubernetes.io/ingress.class"               = "alb"
-      "alb.ingress.kubernetes.io/group.name"      = "vencorcorp-shared-core"
+      "alb.ingress.kubernetes.io/group.name"      = "vendorcorp-core"
       "alb.ingress.kubernetes.io/scheme"          = "internal"
       "alb.ingress.kubernetes.io/certificate-arn" = module.shared.vendorcorp_net_cert_arn
+      "external-dns.alpha.kubernetes.io/hostname" = "keycloak.corp.${module.shared.dns_zone_public_name}"
     }
   }
 
@@ -172,17 +314,4 @@ resource "kubernetes_ingress_v1" "keycloak" {
   }
 
   wait_for_load_balancer = true
-}
-
-################################################################################
-# Add/Update DNS for Load Balancer Ingress
-################################################################################
-resource "aws_route53_record" "keycloak_dns" {
-  zone_id = module.shared.dns_zone_public_id
-  name    = "keycloak.corp"
-  type    = "CNAME"
-  ttl     = "300"
-  records = [
-    kubernetes_ingress_v1.keycloak.status.0.load_balancer.0.ingress.0.hostname
-  ]
 }
