@@ -139,6 +139,21 @@ resource "kubernetes_deployment" "keycloak_deployment" {
           args = ["start"]
 
           env {
+            name = "JAVA_OPTS_APPEND"
+            value = "-Djgroups.dns.query=keycloak-headless"
+          }
+
+          env {
+            name = "KC_CACHE"
+            value = "ispn"
+          }
+
+          env {
+            name = "KC_CACHE_STACK"
+            value = "kubernetes"
+          }
+
+          env {
             name = "KC_DB"
             value = "postgres"
           }
@@ -168,14 +183,24 @@ resource "kubernetes_deployment" "keycloak_deployment" {
             }
           }
 
+          # env {
+          #   name = "KC_FEATURES"
+          #   value = "token-exchange"
+          # }
+
           env {
-            name = "KC_FEATURES"
-            value = "token-exchange"
+            name = "KC_HEALTH_ENABLED"
+            value = "true"
           }
 
           env {
             name = "KC_HOSTNAME"
             value = "keycloak.corp.${module.shared.dns_zone_public_name}"
+          }
+
+          env {
+            name = "KC_METRICS_ENABLED"
+            value = "true"
           }
 
           env {
@@ -209,27 +234,12 @@ resource "kubernetes_deployment" "keycloak_deployment" {
           #   }
           # }
 
-          # readiness_probe {
-          #   http_get {
-          #     path = "/realms/master"
-          #     port = 8080
-          #   }
-          # }
-
-          # liveness_probe {
-          #   http_get {
-          #     path = "/nginx_status"
-          #     port = 80
-
-          #     http_header {
-          #       name  = "X-Custom-Header"
-          #       value = "Awesome"
-          #     }
-          #   }
-
-          #   initial_delay_seconds = 3
-          #   period_seconds        = 3
-          # }
+          readiness_probe {
+            http_get {
+              path = "/health/ready"
+              port = 8080
+            }
+          }
 
           volume_mount {
             mount_path = "/keycloak-secrets"
@@ -271,7 +281,35 @@ resource "kubernetes_service" "keycloak_service" {
       protocol    = "TCP"
     }
 
+     port {
+      name        = "infinispan"
+      port        = 7800
+      target_port = 7800
+      protocol    = "TCP"
+    }
+
     type = "NodePort"
+  }
+}
+
+################################################################################
+# Create headless Service for Keycloak Cluster discovery
+################################################################################
+resource "kubernetes_service" "keycloak_headless_service" {
+  metadata {
+    name      = "keycloak-headless"
+    namespace = var.namespace
+    labels = {
+      app = "keycloak"
+    }
+  }
+  spec {
+    selector = {
+      app = kubernetes_deployment.keycloak_deployment.metadata.0.labels.app
+    } 
+
+    cluster_ip = "None"
+    type = "ClusterIP"
   }
 }
 
