@@ -1,0 +1,16 @@
+endpoints:
+  - name: "KeyCloak Application"
+    group: authentication
+    url: "https://keycloak.corp.vendorcorp.net/health/live"
+    internal: 1m
+    conditions:
+      - "[STATUS] == 200"         # Status must be 200
+      - "[BODY].status == UP"     # The json path "$.status" must be equal to UP
+      - "[RESPONSE_TIME] < 300"   # Response time must be under 300ms
+    ## MOVE THIS TO core-shared-postgresql
+    # - name: "KeyCloak Database"
+    #   group: authentication
+    #   url: "tcp://${PGSQL_HOST}:5432"
+    #   interval: 1m
+    #   conditions:
+    #     - "[CONNECTED] == true"

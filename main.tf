@@ -353,3 +353,20 @@ resource "kubernetes_ingress_v1" "keycloak" {
 
   wait_for_load_balancer = true
 }
+
+################################################################################
+# Create ConfigMap for gatus monitoring
+################################################################################
+resource "kubernetes_config_map" "gatus" {
+  metadata {
+    name = "gatus-config"
+    namespace = var.namespace
+    labels = {
+      "gatus.io/enabled": "true"
+    }
+  }
+
+  data = {
+    "core-shared-keycloak.yaml": "${file("gatus.yaml")}"
+  }
+}
