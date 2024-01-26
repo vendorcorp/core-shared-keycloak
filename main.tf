@@ -8,12 +8,15 @@ terraform {
   }
 }
 
-
 ################################################################################
 # Load Vendor Corp Shared Infra
 ################################################################################
 module "shared" {
-  source                   = "git::ssh://git@github.com/vendorcorp/terraform-shared-infrastructure.git?ref=v0.6.1"
+  source                   = "git::ssh://git@github.com/vendorcorp/terraform-shared-infrastructure.git?ref=v1.1.0"
+}
+
+module "shared_private" {
+  source                   = "git::ssh://git@github.com/vendorcorp/terraform-shared-private-infrastructure.git?ref=v1.4.5"
   environment              = var.environment
 }
 
@@ -33,8 +36,8 @@ provider "postgresql" {
   host            = module.shared.pgsql_cluster_endpoint_write
   port            = module.shared.pgsql_cluster_port
   database        = "postgres"
-  username        = var.pg_admin_username
-  password        = var.pg_admin_password
+  username        = module.shared.pgsql_cluster_master_username
+  password        = module.shared.pgsql_cluster_master_password
   sslmode         = "require"
   connect_timeout = 15
   superuser       = false
@@ -84,8 +87,8 @@ resource "kubernetes_secret" "keycloak" {
 
   data = {
     "keycloak_admin_password" = local.keycloak_admin_password
-    "keycloak_db_username" = local.pgsql_user_username
-    "keycloak_db_password" = local.pgsql_user_password
+    "keycloak_db_username"    = local.pgsql_user_username
+    "keycloak_db_password"    = local.pgsql_user_password
   }
 
   type = "Opaque"
@@ -195,7 +198,7 @@ resource "kubernetes_deployment" "keycloak_deployment" {
 
           env {
             name = "KC_HOSTNAME"
-            value = "keycloak.corp.${module.shared.dns_zone_public_name}"
+            value = "keycloak.${module.shared_private.dns_zone_vendorcorp_name}"
           }
 
           env {
@@ -327,14 +330,14 @@ resource "kubernetes_ingress_v1" "keycloak" {
       "kubernetes.io/ingress.class"               = "alb"
       "alb.ingress.kubernetes.io/group.name"      = "vendorcorp-core"
       "alb.ingress.kubernetes.io/scheme"          = "internal"
-      "alb.ingress.kubernetes.io/certificate-arn" = module.shared.vendorcorp_net_cert_arn
-      "external-dns.alpha.kubernetes.io/hostname" = "keycloak.corp.${module.shared.dns_zone_public_name}"
+      "alb.ingress.kubernetes.io/certificate-arn" = module.shared_private.vendorcorp_cert_arn
+      "external-dns.alpha.kubernetes.io/hostname" = "keycloak.${module.shared_private.dns_zone_vendorcorp_name}"
     }
   }
 
   spec {
     rule {
-      host = "keycloak.corp.${module.shared.dns_zone_public_name}"
+      host = "keycloak.${module.shared_private.dns_zone_vendorcorp_name}"
       http {
         path {
           path = "/*"
@@ -367,6 +370,16 @@ resource "kubernetes_config_map" "gatus" {
   }
 
   data = {
-    "core-shared-keycloak.yaml": "${file("gatus.yaml")}"
+    "core-shared-keycloak.yaml" = <<EOF
+endpoints:
+  - name: "KeyCloak Application"
+    group: authentication
+    url: "https://keycloak.${module.shared_private.dns_zone_vendorcorp_name}/health/live"
+    internal: 1m
+    conditions:
+      - "[STATUS] == 200"         # Status must be 200
+      - "[BODY].status == UP"     # The json path "$.status" must be equal to UP
+      - "[RESPONSE_TIME] < 300"   # Response time must be under 300ms
+    EOF
   }
 }
